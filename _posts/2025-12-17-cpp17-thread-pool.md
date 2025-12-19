@@ -125,6 +125,229 @@ This approach helps to reduce the overhead of creating and destroying threads fo
 C++17 introduced several features that enhance the threading capabilities of the language, making it easier to implement concurrent programming patterns like thread pools.
 In this section, we will explore some of the key C++17 threading features that are relevant to our thread pool implementation in `astroDEM`.
 
+- ## `std::thread`
+
+  `std::thread` is the fundamental class for creating and managing threads in C++. 
+  It is introduced in C++11 and continues to be a core component in C++17.
+  With `std::thread`, you can create a new thread by passing a callable object
+
+  ```cpp
+  #include <thread>
+  #include <iostream>
+  #include <chrono>
+
+  void workerFunction() {
+      std::cout << "Worker thread is running." << std::endl;
+
+      // Simulate some work
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+  }
+
+  int main() {
+      std::thread worker(workerFunction);
+      worker.join(); // Wait for the worker thread to finish
+      return 0;
+  }
+  ```
+
+  Upon creation, the thread starts executing the provided function concurrently with the main thread.`std::thread::join()` is used to block the calling thread until the thread represented by the `std::thread` object has completed its execution. To check if a thread is joinable, you can use the `std::thread::joinable()` method, which returns `true` if the thread is joinable and `false` otherwise.
+
+  ```plaintext
+
+  Main Thread
+      |
+      |-- Create std::thread --> Worker Thread
+      |                          |
+      |                          |-- Execute workerFunction()
+      |                          |
+      |                          |-- Finish execution
+      |
+      |-- Call join() ---------> Wait for Worker Thread to finish
+      |
+      |-- Continue execution after Worker Thread finishes
+
+  ```
+
+  The worker function can be of multiple types, including: 
+    - Free functions (eg. `void workerFunction()`)
+    - Lambda expressions (eg. `[]() { /* ... */ }`)
+    - Functor objects (eg. `struct Worker { void operator()() { /* ... */ } };`)
+    - Member functions (eg. `class MyClass { void memberFunction() { /* ... */ } };`)
+  The usage of different callable types is different:
+  
+  ```cpp
+
+  // Using a lambda expression
+
+  std::thread worker([]() {
+      std::cout << "Worker thread is running." << std::endl;
+  });
+
+  ```
+
+  ```cpp
+
+  // Using a functor object
+
+  struct Worker {
+      void operator()() {
+          std::cout << "Worker thread is running." << std::endl;
+      }
+  };
+
+  std::thread worker(Worker());
+
+  ```
+
+  ```cpp
+
+  // Using a member function
+
+  class MyClass {
+  public:
+      void memberFunction() {
+          std::cout << "Worker thread is running." << std::endl;
+      }
+  };
+
+  MyClass obj;
+  std::thread worker(&MyClass::memberFunction, &obj);
+
+  ```
+
+  The callable object can also accept parameters, which can be passed to the thread constructor:
+
+  ```cpp
+
+  void workerFunction(int id) {
+      std::cout << "Worker thread " << id << " is running." << std::endl;
+  }
+
+  std::thread worker(workerFunction, 1); // Pass 1 as the parameter
+
+  ```
+
+  One thing to notice is that the return type of the callable object must be `void`. If the callable object has a non-void return type, it will result in errors depending on the compiler. To handle non-void return types, we can use `std::packaged_task`,
+  `std::promise`, and `std::future`, which will be discussed later in this article.
+
+  The `std::thread` class is not copyable, meaning you cannot copy a `std::thread` object. This is to prevent multiple threads from trying to manage the same thread of execution, which could lead to undefined behavior.
+  However, `std::thread` is movable, allowing you to transfer ownership of a thread from one `std::thread` object to another using move semantics.
+
+- ## `std::mutex`  and  `std::lock_guard`
+
+  `std::mutex` is a synchronization primitive that can be used to protect shared data from being accessed simultaneously by multiple threads. It works by allowing only one thread to lock the mutex at a time, preventing other threads from accessing the protected data until the mutex is unlocked. `std::lock_guard` is a convenient RAII-style wrapper for `std::mutex` that automatically locks the mutex when the `std::lock_guard` object is created and unlocks it when the object goes out of scope.
+
+  If multiple threads access shared data without proper synchronization, it can lead to data races and inconsistent results. 
+  A diagram is shown below:
+
+  ```plaintext
+    Thread 1                     Thread 2
+      |                             |
+      |-- Read sharedResource       |
+      |                             | -- Read sharedResource (The value is the same as Thread 1)
+      |-- Increment sharedResource  |
+      |                             | -- Increment sharedResource
+      |-- Write sharedResource      |
+      |                             | -- Write sharedResource
+    Final value of sharedResource may be inconsistent due to race conditions.
+  ```
+
+  A simple example of using `std::mutex` and `std::lock_guard` is shown below:
+
+
+  ```cpp
+  #include <iostream>
+  #include <thread>
+  #include <mutex>
+  #include <vector>
+
+  std::mutex mtx; // Mutex for synchronizing access to shared resource
+  int sharedResource = 0; // Shared resource
+
+  void workerFunction(int id) {
+      // Lock the mutex using std::lock_guard
+      std::lock_guard<std::mutex> lock(mtx);
+
+      // Critical section: safely access and modify the shared resource
+      ++sharedResource;
+      std::cout << "Worker " << id << " incremented sharedResource to " << sharedResource << std::endl;
+  }
+
+  int main() {
+      const int numWorkers = 5;
+      std::vector<std::thread> workers(0);
+
+      // Create and start worker threads
+      for (int i = 0; i < numWorkers; ++i) {
+          workers.emplace_back(workerFunction, i);
+      }
+
+      // Wait for all worker threads to finish
+      for (auto& worker : workers) {
+          worker.join();
+      }
+
+      // Final value of sharedResource
+      std::cout << "Final value of sharedResource: " << sharedResource << std::endl;
+
+      // If mutex is not used, the output may be inconsistent due to
+      // race conditions.
+
+      return 0;
+  }
+  ```
+
+  There are other lock guards available in C++17, such as `std::unique_lock` and `std::shared_lock`, which provide more flexibility and features for managing locks. While `std::lock_guard` is a simple and efficient way to manage mutex locks, `std::unique_lock` allows for more complex locking strategies, such as deferred locking and timed locking. `std::shared_lock` is used for shared (read) access to a resource, allowing multiple threads to read the resource simultaneously while preventing write access.
+  When in need of lock two mutexes, dead lock may occur if two threads try to lock the same mutexes in different orders.
+  The following is a diagram:
+
+  ```plaintext
+    Thread 1                     Thread 2
+      |                             |
+      |-- lock(mutex1)              |
+      |                             |-- lock(mutex2)
+      |                             |
+      |-- lock(mutex2)              |
+      |                             |-- lock(mutex1)
+      |                             |
+    Deadlock occurs here as both threads are waiting for each other to release the mutexes.
+
+  ```
+
+  To avoid deadlock when locking multiple mutexes, two approaches can be used: `std::lock` and `std::scoped_lock`.
+  `std::lock` is firstly introduced in C++11, which locks multiple mutexes without the risk of deadlock.
+  `std::scoped_lock` is introduced in C++17, which is a variadic template that can lock multiple mutexes in a deadlock-free manner.
+
+  ```cpp
+
+  // Locking two mutexes without deadlock
+
+  std::mutex mutex1;
+  std::mutex mutex2;
+
+  std::lock(mutex1, mutex2); // Lock both mutexes without deadlock
+  std::lock_guard<std::mutex> lock1(mutex1, std::adopt_lock);
+  std::lock_guard<std::mutex> lock2(mutex2, std::adopt_lock);
+
+  ```
+
+  ```cpp
+
+  // Locking two mutexes with std::scoped_lock (C++17)
+
+  std::mutex mutex1;
+  std::mutex mutex2;
+
+  std::scoped_lock lock(mutex1, mutex2); // Lock both mutexes without deadlock
+
+  ```
+
+- ## `std::condition_variable`
+
+- ## `std::future` and `std::promise`
+
+- ## `std::packaged_task`
+
 ---
 
 # Implementation of Thread Pool
