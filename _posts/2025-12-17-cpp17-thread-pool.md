@@ -342,9 +342,79 @@ In this section, we will explore some of the key C++17 threading features that a
 
   ```
 
+  Though using locks is essential for thread safety, excessive locking can lead to performance bottlenecks and reduced concurrency.
+  It is important to minimize the scope of locks and avoid holding locks for extended periods of time.
+
 - ## `std::condition_variable`
 
+  `std::condition_variable` is a synchronization primitive that allows threads to wait for certain conditions to be met before proceeding. 
+  A common use case for `std::condition_variable` is to implement producer-consumer scenarios, where one or more threads produce data and one or more threads consume that data.
+  In a thread pool, `std::condition_variable` is often used to notify worker threads when new tasks are available in the task queue.
+
+  A simple example of using `std::condition_variable` is shown below:
+
+  ```cpp
+  #include <iostream>
+  #include <thread>
+  #include <mutex>
+  #include <condition_variable>
+  
+  std::mutex mtx;
+  std::condition_variable cv;
+  bool data_ready = false;
+
+  void producer() 
+  {
+      std::this_thread::sleep_for(std::chrono::seconds(2)); // Simulate work
+      {
+          std::lock_guard<std::mutex> lock(mtx);
+          data_ready = true;
+          std::cout << "Data Produced!" << std::endl;
+      }
+      cv.notify_one();
+  }
+
+  void consumer() {
+      std::unique_lock<std::mutex> lock(mtx);
+      cv.wait(lock, [] { return data_ready; }); // Prevents spurious wakeups
+      std::cout << "Data Consumed!" << std::endl;
+  }
+
+  int main() {
+      std::thread t1(consumer);
+      std::thread t2(producer);
+      t1.join();
+      t2.join();
+  }
+  ```
+
+  `std::condition_variable::wait` uses a conjunction of a mutex and a predicate to wait for a condition to be met. The mutex is locked before calling `wait`, and the predicate is checked to determine if the thread should continue waiting or proceed. This approach helps prevent spurious wakeups, which can occur when a thread is awakened without the condition being met.
+
+  In a easy way to visualize how `std::condition_variable` works:
+
+  ```plaintext
+    Producer Thread                     Consumer Thread
+      |                                     |
+      |                                     | -- wait on cv (cv.wait())
+      |-- Produce data                      |
+      |                                     |
+      |-- Lock mutex                        |
+      |-- Set data_ready = true             |
+      |-- Unlock mutex                      |
+      |-- Notify consumer (cv.notify_one()) |
+      |                                     |
+      |                                     | -- Lock mutex
+      |                                     | -- Check data_ready
+      |                                     | -- Consume data
+      |                                     | -- Unlock mutex
+  ```
+
+  Note only threads hold the same condition variable can be notified. 
+
 - ## `std::future` and `std::promise`
+
+  `std::future` and `std::promise` are synchronization primitives that allow threads to communicate and share results asynchronously. 
+  They are firstly introduced in C++11 and continue to be useful in C++17. 
 
 - ## `std::packaged_task`
 
