@@ -413,14 +413,136 @@ In this section, we will explore some of the key C++17 threading features that a
 
 - ## `std::future` and `std::promise`
 
-  `std::future` and `std::promise` are synchronization primitives that allow threads to communicate and share results asynchronously. 
-  They are firstly introduced in C++11 and continue to be useful in C++17. 
+  `std::future` and `std::promise` are synchronization primitives that allow threads to communicate and share results asynchronously. They are firstly introduced in C++11 and continue to be useful in C++17. `std::future` represents a value that will be available at some point in the future, while `std::promise` is used to set the value that will be retrieved by the corresponding `std::future`. 
+
+  `std::future` can be created using `std::promise` or `std::async`. For example, using `std::async`:
+  ```cpp
+  #include <iostream>
+  #include <thread>
+  #include <future>
+
+  int computeValue() {
+      std::this_thread::sleep_for(std::chrono::seconds(2)); // Simulate work
+      return 42;
+  }
+
+  int main() {
+      // Using std::async to create a future
+      std::future<int> fut = std::async(std::launch::async, computeValue);
+
+      std::cout << "Waiting for the result..." << std::endl;
+      int result = fut.get(); // Blocks until the result is available
+      std::cout << "Result: " << result << std::endl;
+
+      return 0;
+  }
+  ```
+  Using `std::promise` to create a future:
+  ```cpp
+  #include <iostream>
+  #include <thread>
+  #include <future>
+
+  void computeValue(std::promise<int> &prom) {
+      std::this_thread::sleep_for(std::chrono::seconds(2)); // Simulate work
+      prom.set_value(42); // Set the value for the promise
+  }
+
+  int main() {
+      std::promise<int> prom;
+      std::future<int> fut = prom.get_future(); // Get the future from the promise
+
+      std::thread worker(computeValue, std::ref(prom));
+
+      std::cout << "Waiting for the result..." << std::endl;
+      int result = fut.get(); // Blocks until the result is available
+      std::cout << "Result: " << result << std::endl;
+
+      worker.join();
+      return 0;
+  }
+  ```
+
+  The key motivation of using `std::future` and `std::promise` is to facilitate communication between threads, expecially for error handling. When throwing exceptions in a thread, it can be challenging to propagate the exception back to the main thread while maintaining thread safety. `std::promise` and `std::future` provide a mechanism to achieve this by allowing the worker thread to set an exception on the promise, which can then be retrieved by the main thread through the future. 
+  It can be implemented as follows:
+
+  ```cpp
+
+  #include <iostream>
+  #include <thread>
+  #include <future>
+
+  void computeValue(std::promise<int> &prom) {
+      try {
+          std::this_thread::sleep_for(std::chrono::seconds(2)); // Simulate work
+          throw std::runtime_error("An error occurred in the worker thread");
+          prom.set_value(42); // Set the value for the promise
+      } catch (...) {
+          prom.set_exception(std::current_exception()); // Set the exception for the promise
+      }
+  }
+
+  int main() {
+      std::promise<int> prom;
+      std::future<int> fut = prom.get_future(); // Get the future from the promise
+
+      std::thread worker(computeValue, std::ref(prom));
+
+      std::cout << "Waiting for the result..." << std::endl;
+      try {
+          int result = fut.get(); // Blocks until the result is available
+          std::cout << "Result: " << result << std::endl;
+      } catch (const std::exception &e) {
+          std::cout << "Caught exception: " << e.what() << std::endl;
+      }
+
+      worker.join();
+      return 0;
+  }
+  ```
+  Purely using `std::thread` does not provide a built-in mechanism for propagating exceptions from worker threads to the main thread. Instead, exceptions thrown in a worker thread will terminate that thread, and the main thread will not be aware of the exception unless additional mechanisms are implemented to capture and communicate the exception back to the main thread.
 
 - ## `std::packaged_task`
+
+  `std::packaged_task` is a wrapper for a callable object (like a function or lambda) that allows it to be executed asynchronously and provides a `std::future` to retrieve the result of the callable once it has completed. It is useful for scenarios where you want to execute a task in a separate thread and obtain the result later.
+
+  A simple example of using `std::packaged_task` is shown below:
+
+  ```cpp
+  #include <iostream>
+  #include <thread>
+  #include <future>
+
+  int computeValue(int x) {
+      std::this_thread::sleep_for(std::chrono::seconds(2)); // Simulate work
+      return x * 2;
+  }
+
+  int main() {
+      // Create a packaged_task that wraps the computeValue function
+      std::packaged_task<int(int)> task(computeValue);
+
+      // Get the future associated with the packaged_task
+      std::future<int> fut = task.get_future();
+
+      // Execute the task in a separate thread
+      std::thread worker(std::move(task), 21); // Pass 21 as the argument
+
+      std::cout << "Waiting for the result..." << std::endl;
+      int result = fut.get(); // Blocks until the result is available
+      std::cout << "Result: " << result << std::endl;
+
+      worker.join();
+      return 0;
+  }
+  ```
+
+  Cooperating with `std::future` and `std::promise`, `std::packaged_task` provides a convenient way to execute tasks asynchronously and retrieve their results, making it a valuable tool for concurrent programming in C++17.
 
 ---
 
 # Implementation of Thread Pool
+
 
 ---
 
